@@ -3,6 +3,7 @@ use cosmwasm_std::{Uint256};
 
 // TODO: Verify for exact same hash function
 #[cw_serde]
+#[derive(Clone)]
 pub struct Immutables {
     pub order_hash: String,
     pub hashlock: String,
@@ -38,3 +39,4 @@ pub enum TimelockStage {
     DstPublicWithdrawal,
     DstCancellation,
 }
+
