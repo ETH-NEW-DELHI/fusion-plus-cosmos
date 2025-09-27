@@ -1,6 +1,10 @@
-use cosmwasm_std::{Addr, Deps, HexBinary, StdError, StdResult, Uint256};
+use std::collections::HashMap;
+
+use cosmwasm_std::{Addr, Deps, HexBinary, StdError, StdResult, Uint256, MessageInfo};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3::Keccak256;
+
+use crate::{ContractError, Immutables};
 
 /// Compute Keccak256 hash (compatible with Ethereum)
 pub fn keccak256(data: &[u8]) -> String {
@@ -55,6 +59,62 @@ pub fn validate_sufficient_balance(available: Uint256, required: Uint256) -> Std
     if available < required {
         return Err(StdError::generic_err("Insufficient balance"));
     }
+    Ok(())
+}
+
+/// Validates that all required tokens are provided with sufficient amounts
+pub fn validate_token_amounts(
+    immutables: &Immutables,
+    info: &MessageInfo,
+    safety_deposit_token: &str,
+) -> Result<(), ContractError> {
+    let funds_map: HashMap<String, Uint256> = info.funds
+        .iter()
+        .map(|coin| (coin.denom.clone(), Uint256::from(coin.amount)))
+        .collect();
+    
+    let is_same_token = safety_deposit_token == immutables.token;
+    
+    if is_same_token {
+        let total_expected = immutables.safety_deposit + immutables.amount;
+        let actual_amount = funds_map.get(&immutables.token).copied().unwrap_or_else(Uint256::zero);
+        
+        if actual_amount < total_expected {
+            return Err(ContractError::InsufficientTokenAmount {
+                token: immutables.token.clone(),
+                expected: total_expected.to_string(),
+                actual: actual_amount.to_string(),
+            });
+        }
+    } else {
+        
+        let actual_safety_deposit_amount = funds_map
+            .get(safety_deposit_token)
+            .copied()
+            .unwrap_or_else(Uint256::zero);
+        
+        if actual_safety_deposit_amount < immutables.safety_deposit {
+            return Err(ContractError::InsufficientTokenAmount {
+                token: safety_deposit_token.to_string(),
+                expected: immutables.safety_deposit.to_string(),
+                actual: actual_safety_deposit_amount.to_string(),
+            });
+        }
+        
+        let actual_main_amount = funds_map
+            .get(&immutables.token)
+            .copied()
+            .unwrap_or_else(Uint256::zero);
+        
+        if actual_main_amount < immutables.amount {
+            return Err(ContractError::InsufficientTokenAmount {
+                token: immutables.token.clone(),
+                expected: immutables.amount.to_string(),
+                actual: actual_main_amount.to_string(),
+            });
+        }
+    }
+    
     Ok(())
 }
 
