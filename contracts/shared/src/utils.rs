@@ -1,7 +1,3 @@
-use crate::{
-    types::{TimelockStage, Timelocks},
-    Immutables,
-};
 use cosmwasm_std::{Addr, Deps, HexBinary, StdError, StdResult, Uint256};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3::Keccak256;
@@ -24,22 +20,6 @@ pub fn sha256(data: &[u8]) -> String {
 pub fn validate_secret(secret: &str, hashlock: &str) -> bool {
     let secret_hash = keccak256(secret.as_bytes());
     secret_hash == hashlock
-}
-
-/// Get timelock value for given stage
-pub fn get_timelock(timelocks: &Timelocks, stage: TimelockStage) -> u64 {
-    let base_time = timelocks.deployed_at;
-    match stage {
-        TimelockStage::SrcWithdrawal => base_time + timelocks.src_withdrawal as u64,
-        TimelockStage::SrcPublicWithdrawal => base_time + timelocks.src_public_withdrawal as u64,
-        TimelockStage::SrcCancellation => base_time + timelocks.src_cancellation as u64,
-        TimelockStage::SrcPublicCancellation => {
-            base_time + timelocks.src_public_cancellation as u64
-        }
-        TimelockStage::DstWithdrawal => base_time + timelocks.dst_withdrawal as u64,
-        TimelockStage::DstPublicWithdrawal => base_time + timelocks.dst_public_withdrawal as u64,
-        TimelockStage::DstCancellation => base_time + timelocks.dst_cancellation as u64,
-    }
 }
 
 /// Check if current time is after given timelock

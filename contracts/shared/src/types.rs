@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{StdError, StdResult, Uint256};
+use cosmwasm_std::{StdError, StdResult, Timestamp, Uint256};
 use serde::{Deserialize, Serialize};
 
 use crate::keccak256;
@@ -46,6 +46,32 @@ pub struct Timelocks {
     pub dst_withdrawal: u32,
     pub dst_public_withdrawal: u32,
     pub dst_cancellation: u32,
+}
+
+impl Timelocks {
+    pub fn set_deployed_at(&mut self, time: Timestamp) {
+        self.deployed_at = time.seconds()
+    }
+
+    /// Get timelock value for given stage
+    pub fn get_timelock(&self, stage: TimelockStage) -> u64 {
+        let base_time = self.deployed_at;
+        match stage {
+            TimelockStage::SrcWithdrawal => base_time + self.src_withdrawal as u64,
+            TimelockStage::SrcPublicWithdrawal => {
+                base_time + self.src_public_withdrawal as u64
+            }
+            TimelockStage::SrcCancellation => base_time + self.src_cancellation as u64,
+            TimelockStage::SrcPublicCancellation => {
+                base_time + self.src_public_cancellation as u64
+            }
+            TimelockStage::DstWithdrawal => base_time + self.dst_withdrawal as u64,
+            TimelockStage::DstPublicWithdrawal => {
+                base_time + self.dst_public_withdrawal as u64
+            }
+            TimelockStage::DstCancellation => base_time + self.dst_cancellation as u64,
+        }
+    }
 }
 
 /// Timelock stages enum
