@@ -1,18 +1,21 @@
-use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Uint256};
+use cosmwasm_schema::{cw_serde, QueryResponses};
+use cosmwasm_std::{Uint256, Binary};
 use shared::Immutables;
 
 #[cw_serde]
-pub struct InstantiateMsg {}
+pub struct InstantiateMsg {
+    pub safety_deposit_denom: String,
+    pub rescue_delay: u32
+}
 
 #[cw_serde]
 pub enum ExecuteMsg {
     Withdraw {
-        secret: String,
+        secret: Binary,
         immutables: Immutables,
     },
     PublicWithdraw {
-        secret: String,
+        secret: Binary,
         immutables: Immutables,
     },
     Cancel {
@@ -24,3 +27,7 @@ pub enum ExecuteMsg {
         immutables: Immutables,
     },
 }
+
+#[cw_serde]
+#[derive(QueryResponses)]
+pub enum QueryMsg {}

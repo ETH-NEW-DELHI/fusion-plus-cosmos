@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::keccak256;
 
-// TODO: Verify for exact same hash function
 #[cw_serde]
 pub struct Immutables {
     pub order_hash: String,
@@ -70,6 +69,7 @@ impl Timelocks {
                 base_time + self.dst_public_withdrawal as u64
             }
             TimelockStage::DstCancellation => base_time + self.dst_cancellation as u64,
+            TimelockStage::RescueDelay(delay) => base_time + delay as u64
         }
     }
 }
@@ -84,6 +84,7 @@ pub enum TimelockStage {
     DstWithdrawal,
     DstPublicWithdrawal,
     DstCancellation,
+    RescueDelay(u32),
 }
 
 #[derive(Serialize, Deserialize)]

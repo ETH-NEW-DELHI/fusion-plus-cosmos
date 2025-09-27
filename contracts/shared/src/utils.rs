@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use cosmwasm_std::{Addr, Deps, HexBinary, StdError, StdResult, Uint256, MessageInfo};
+use cosmwasm_std::{instantiate2_address, Addr, Binary, CanonicalAddr, HexBinary, MessageInfo, QuerierWrapper, StdError, StdResult, Uint256};
 use sha2::{Digest as Sha2Digest, Sha256};
 use sha3::Keccak256;
 
@@ -21,8 +21,8 @@ pub fn sha256(data: &[u8]) -> String {
 }
 
 /// Validate secret against hashlock
-pub fn validate_secret(secret: &str, hashlock: &str) -> bool {
-    let secret_hash = keccak256(secret.as_bytes());
+pub fn validate_secret(secret: &Binary, hashlock: &str) -> bool {
+    let secret_hash = keccak256(secret);
     secret_hash == hashlock
 }
 
@@ -38,9 +38,9 @@ pub fn is_before_timelock(current_time: u64, timelock: u64) -> bool {
 
 /// Get the code hash of a contract using its code ID
 /// This is essential for deterministic address computation in CosmWasm Instantiate2
-pub fn get_code_hash(deps: Deps, code_id: u64) -> StdResult<HexBinary> {
+pub fn get_code_hash(querier: QuerierWrapper, code_id: u64) -> StdResult<HexBinary> {
     // Query the code info to get the code hash
-    let code_info = deps.querier.query_wasm_code_info(code_id)?;
+    let code_info = querier.query_wasm_code_info(code_id)?;
     
     // Convert the code hash to hex string
     Ok(code_info.checksum)
@@ -118,15 +118,39 @@ pub fn validate_token_amounts(
     Ok(())
 }
 
+/// Compute the deterministic address for an escrow contract
+/// This function extracts the core logic for computing deterministic addresses
+pub fn compute_escrow_address(
+    immutables: &Immutables, 
+    escrow_dst_code_hash: HexBinary,
+    factory_contract_address: &CanonicalAddr,
+) -> Result<String, ContractError> {
+
+    let salt = immutables.compute_immutables_hash()?;
+    
+    // Convert salt string to bytes for instantiate2_address
+    let salt_bytes = hex::decode(salt)
+        .map_err(|_| ContractError::Std(cosmwasm_std::StdError::generic_err("Invalid salt format")))?;
+    
+    let escrow_address = instantiate2_address(
+        &escrow_dst_code_hash, 
+        factory_contract_address, 
+        &salt_bytes
+    ).map_err(|e| ContractError::Std(cosmwasm_std::StdError::generic_err(format!("Failed to compute address: {}", e))))?;
+    
+    Ok(escrow_address.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn test_secret_validation() {
-        let secret = "my_secret";
-        let hashlock = keccak256(secret.as_bytes());
+        let secret = Binary::from(b"my_secret" as &[u8]);
+        let wrong_secret = Binary::from(b"wrong_secret" as &[u8]);
+        let hashlock = keccak256(&secret);
 
-        assert!(validate_secret(secret, &hashlock));
-        assert!(!validate_secret("wrong_secret", &hashlock));
+        assert!(validate_secret(&secret, &hashlock));
+        assert!(!validate_secret(&wrong_secret, &hashlock));
     }
 }

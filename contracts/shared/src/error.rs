@@ -24,4 +24,24 @@ pub enum ContractError {
 
     #[error("Invalid safety deposit token: {token}")]
     InvalidSafetyDepositToken { token: String },
+
+    #[error("Unauthorized")]
+    Unauthorized {},
+
+    #[error("Invalid secret")]
+    InvalidSecret {},
+
+    #[error("Invalid time")]
+    InvalidTime {},
+
+    #[error("Invalid immutables")]
+    InvalidImmutables {},
+
+    #[error("Timelock has not reached")]
+    TimelockNotReached {},
+
+    #[error("Failed to convert uint256 into uint128")]
+    UintConversionFailed {},
+    #[error("error fee parsing")]
+    ErrorFeeParsing {},
 }
