@@ -1,7 +1,10 @@
-use cosmwasm_std::{Addr, Uint256, StdResult, StdError};
-use sha2::{Sha256, Digest as Sha2Digest};
-use sha3::{Keccak256};
-use crate::types::{Timelocks, TimelockStage};
+use crate::{
+    types::{TimelockStage, Timelocks},
+    Immutables,
+};
+use cosmwasm_std::{Addr, Deps, HexBinary, StdError, StdResult, Uint256};
+use sha2::{Digest as Sha2Digest, Sha256};
+use sha3::Keccak256;
 
 /// Compute Keccak256 hash (compatible with Ethereum)
 pub fn keccak256(data: &[u8]) -> String {
@@ -30,7 +33,9 @@ pub fn get_timelock(timelocks: &Timelocks, stage: TimelockStage) -> u64 {
         TimelockStage::SrcWithdrawal => base_time + timelocks.src_withdrawal as u64,
         TimelockStage::SrcPublicWithdrawal => base_time + timelocks.src_public_withdrawal as u64,
         TimelockStage::SrcCancellation => base_time + timelocks.src_cancellation as u64,
-        TimelockStage::SrcPublicCancellation => base_time + timelocks.src_public_cancellation as u64,
+        TimelockStage::SrcPublicCancellation => {
+            base_time + timelocks.src_public_cancellation as u64
+        }
         TimelockStage::DstWithdrawal => base_time + timelocks.dst_withdrawal as u64,
         TimelockStage::DstPublicWithdrawal => base_time + timelocks.dst_public_withdrawal as u64,
         TimelockStage::DstCancellation => base_time + timelocks.dst_cancellation as u64,
@@ -45,6 +50,16 @@ pub fn is_after_timelock(current_time: u64, timelock: u64) -> bool {
 /// Check if current time is before given timelock
 pub fn is_before_timelock(current_time: u64, timelock: u64) -> bool {
     current_time < timelock
+}
+
+/// Get the code hash of a contract using its code ID
+/// This is essential for deterministic address computation in CosmWasm Instantiate2
+pub fn get_code_hash(deps: Deps, code_id: u64) -> StdResult<HexBinary> {
+    // Query the code info to get the code hash
+    let code_info = deps.querier.query_wasm_code_info(code_id)?;
+    
+    // Convert the code hash to hex string
+    Ok(code_info.checksum)
 }
 
 /// Validate caller is authorized
@@ -70,7 +85,7 @@ mod tests {
     fn test_secret_validation() {
         let secret = "my_secret";
         let hashlock = keccak256(secret.as_bytes());
-        
+
         assert!(validate_secret(secret, &hashlock));
         assert!(!validate_secret("wrong_secret", &hashlock));
     }
