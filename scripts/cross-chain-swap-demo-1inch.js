@@ -175,15 +175,41 @@ class CrossChainSwapDemo1inch {
                              (BigInt(100) << 32n) | // dstPublicWithdrawal (32 bits)
                              BigInt(101); // dstCancellation (32 bits)
       
+      // Get user's Cosmos address for the taker (they will withdraw from Osmosis)
+      const userCosmosAddress = (await this.userCosmosWallet.getAccounts())[0].address;
+      
+      // Create immutables for Ethereum (with Uint256 addresses)
       this.immutables = {
         orderHash: ethers.keccak256(ethers.toUtf8Bytes("swap_" + Date.now())),
         hashlock: this.hashlock,
         maker: addressToUint256(this.userEthWallet.address),
-        taker: addressToUint256(this.resolverEthWallet.address),
+        taker: addressToUint256(this.resolverEthWallet.address), // Resolver for Ethereum
         token: addressToUint256(ethers.ZeroAddress), // ETH
         amount: ethers.parseEther(CONFIG.SWAP_AMOUNT_ETH),
         safetyDeposit: ethers.parseEther("0.0001"), // Reduced safety deposit
         timelocks: timelocksPacked
+      };
+      
+      // Create CosmWasm immutables (with string addresses and snake_case field names)
+      this.cosmosImmutables = {
+        order_hash: this.immutables.orderHash,
+        hashlock: this.immutables.hashlock,
+        maker: this.userEthWallet.address, // User's Ethereum address as string
+        taker: userCosmosAddress, // User's Cosmos address (they withdraw from Osmosis)
+        token: "uosmo", // OSMO token
+        amount: ethers.parseUnits(CONFIG.SWAP_AMOUNT_OSMO, 6).toString(), // OSMO amount
+        safety_deposit: ethers.parseUnits("0.01", 6).toString(), // OSMO safety deposit
+        timelocks: {
+          deployed_at: 0,
+          src_withdrawal: 120,
+          src_public_withdrawal: 121,
+          src_cancellation: 122,
+          src_public_cancellation: 10,
+          dst_withdrawal: 100,
+          dst_public_withdrawal: 101,
+          dst_cancellation: 3000 // 50 minutes in seconds
+        },
+        parameters: []
       };
       
       logInfo(`Order data created with hash: ${this.immutables.orderHash}`);
@@ -370,7 +396,7 @@ class CrossChainSwapDemo1inch {
       logInfo(`Successfully connected to Osmosis testnet`);
       
       // Try setting deployed_at to 0 - the contract might set it automatically
-      const currentTime = 0;
+      const currentTime = Math.floor(Date.now() / 1000);
       
       // Calculate OSMO amounts
       const osmoAmount = ethers.parseUnits(CONFIG.SWAP_AMOUNT_OSMO, 6); // OSMO has 6 decimals
@@ -380,26 +406,14 @@ class CrossChainSwapDemo1inch {
         const cosmWasmMsg = {
           create_escrow_dst: {
             immutables: {
-              order_hash: this.immutables.orderHash,
-              hashlock: this.immutables.hashlock,
-              maker: this.immutables.maker.toString(),
-              taker: this.immutables.taker.toString(),
-              token: "uosmo", // Use OSMO token denomination
-              amount: osmoAmount.toString(), // Use actual OSMO amount
-              safety_deposit: safetyDepositAmount.toString(), // Use actual OSMO safety deposit
+              ...this.cosmosImmutables,
               timelocks: {
+                ...this.cosmosImmutables.timelocks,
                 deployed_at: currentTime, // Use current timestamp
-                src_withdrawal: 120,
-                src_public_withdrawal: 121,
-                src_cancellation: 122,
-                src_public_cancellation: 10,
-                dst_withdrawal: 100,
-                dst_public_withdrawal: 101,
-                dst_cancellation: 50 // Reduced to ensure it's less than src_cancellation_timestamp
-              },
-              parameters: []
+                dst_cancellation: 3000 // 50 minutes in seconds (less than 1 hour)
+              }
             },
-            src_cancellation_timestamp: deployedAt
+            src_cancellation_timestamp: currentTime + 4000 // 4000 seconds in the future
           }
         };
       
@@ -431,33 +445,40 @@ class CrossChainSwapDemo1inch {
         logInfo(`Transaction hash: ${result.transactionHash}`);
         logInfo(`🔗 OSMOSIS TX HASH: ${result.transactionHash}`);
         
-        // Store transaction hash
+        // Store transaction hash and deployed_at time
         this.txHashes.osmosis.createEscrowDst = result.transactionHash;
+        this.escrowDeployedAt = currentTime; // Store the deployed_at time for withdrawal
         
-        // Debug: Log transaction result to see what's available
-        logInfo(`Transaction result:`, JSON.stringify(result, null, 2));
-        
-        // Extract and store the escrow address from transaction events
-        let escrowAddress = null;
-        
-        // Try different event types and attribute keys
-        for (const event of result.events) {
-          if (event.type === 'wasm' || event.type === 'instantiate') {
-            for (const attr of event.attributes) {
-              if (attr.key === 'escrow_address' || attr.key === 'contract_address' || attr.key === 'address') {
-                escrowAddress = attr.value;
-                break;
+        // Query the transaction to get the escrow address
+        try {
+          const txDetails = await cosmosClient.getTx(result.transactionHash);
+          logInfo(`Transaction details retrieved, looking for escrow address...`);
+          
+          // Look for instantiate events that contain the contract address
+          let escrowAddress = null;
+          for (const event of txDetails.events) {
+            if (event.type === 'instantiate') {
+              for (const attr of event.attributes) {
+                if (attr.key === '_contract_address') {
+                  escrowAddress = attr.value;
+                  break;
+                }
               }
             }
+            if (escrowAddress) break;
           }
-          if (escrowAddress) break;
-        }
-        
-        if (escrowAddress) {
-          this.dstEscrowAddress = escrowAddress;
-          logInfo(`EscrowDst address: ${this.dstEscrowAddress}`);
-        } else {
-          // Fallback to the provided address if not found in events
+          
+          if (escrowAddress) {
+            this.dstEscrowAddress = escrowAddress;
+            logInfo(`✅ EscrowDst address found: ${this.dstEscrowAddress}`);
+          } else {
+            // Fallback to the provided address if not found
+            this.dstEscrowAddress = CONFIG.OSMOSIS_ESCROW_DST;
+            logInfo(`⚠️  Using provided EscrowDst address: ${this.dstEscrowAddress}`);
+          }
+        } catch (queryError) {
+          logInfo(`Failed to query transaction details: ${queryError.message}`);
+          // Fallback to the provided address 
           this.dstEscrowAddress = CONFIG.OSMOSIS_ESCROW_DST;
           logInfo(`Using provided EscrowDst address: ${this.dstEscrowAddress}`);
         }
@@ -486,37 +507,31 @@ class CrossChainSwapDemo1inch {
     try {
       logInfo(`User withdrawing OSMO from ${this.dstEscrowAddress}`);
       logInfo(`Using secret: ${this.secret}`);
+      logInfo(`Expected hashlock: ${this.hashlock}`);
+      
+      // Verify secret matches hashlock
+      const secretBytes = ethers.getBytes(this.secret);
+      const secretHash = ethers.keccak256(secretBytes);
+      logInfo(`Secret hash: ${secretHash}`);
+      logInfo(`Hashlock match: ${secretHash === this.hashlock}`);
       
       // Prepare the withdrawal message (convert secret to base64 for Binary type)
-      const secretBytes = ethers.getBytes(this.secret);
       const secretBase64 = Buffer.from(secretBytes).toString('base64');
       
       // Calculate OSMO amounts for withdrawal (must match what was used in creation)
       const osmoAmount = ethers.parseUnits(CONFIG.SWAP_AMOUNT_OSMO, 6); // OSMO has 6 decimals
       const safetyDepositAmount = ethers.parseUnits("0.01", 6); // 0.01 OSMO safety deposit
       
+      // Use the deployed_at time from when the escrow was created
       const withdrawMsg = {
         withdraw: {
           secret: secretBase64, // Convert to base64 for Binary type
           immutables: {
-            order_hash: this.immutables.orderHash,
-            hashlock: this.immutables.hashlock,
-            maker: this.immutables.maker.toString(),
-            taker: this.immutables.taker.toString(),
-            token: "uosmo", // Use OSMO token denomination (must match creation)
-            amount: osmoAmount.toString(), // Use actual OSMO amount (must match creation)
-            safety_deposit: safetyDepositAmount.toString(), // Use actual OSMO safety deposit (must match creation)
+            ...this.cosmosImmutables,
             timelocks: {
-              deployed_at: 0,
-              src_withdrawal: 120,
-              src_public_withdrawal: 121,
-              src_cancellation: 122,
-              src_public_cancellation: 10,
-              dst_withdrawal: 100,
-              dst_public_withdrawal: 101,
-              dst_cancellation: 50 // Must match the reduced value used in creation
-            },
-            parameters: []
+              ...this.cosmosImmutables.timelocks,
+              deployed_at: this.escrowDeployedAt // Use the actual deployed_at time
+            }
           }
         }
       };
@@ -524,6 +539,12 @@ class CrossChainSwapDemo1inch {
       logInfo(`🌐 EXECUTING REAL OSMOSIS WITHDRAWAL:`);
       logInfo(`Contract Address: ${this.dstEscrowAddress}`);
       logInfo(`Method: withdraw`);
+      logInfo(`Withdrawal message:`, JSON.stringify(withdrawMsg, null, 2));
+      
+      // Wait for dst_withdrawal timelock (100 seconds)
+      logInfo(`⏳ Waiting for dst_withdrawal timelock (100 seconds)...`);
+      await new Promise(resolve => setTimeout(resolve, 101000)); // Wait 101 seconds
+      logInfo(`✅ Timelock reached, proceeding with withdrawal`);
       
       // Initialize Osmosis client for user (using testnet)
       const userCosmosAddress = (await this.userCosmosWallet.getAccounts())[0].address;
