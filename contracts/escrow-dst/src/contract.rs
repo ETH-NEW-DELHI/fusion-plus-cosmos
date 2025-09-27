@@ -65,8 +65,8 @@ pub fn execute(
     match msg {
         ExecuteMsg::Withdraw { secret, immutables } => withdraw(deps, env, info, secret, immutables),
         ExecuteMsg::PublicWithdraw { secret, immutables } => public_withdraw(deps, env, info, secret, immutables),
-        ExecuteMsg::Cancel { immutables } => todo!(),
-        ExecuteMsg::RescueFunds { token, amount,immutables } => todo!()
+        ExecuteMsg::Cancel { immutables } => cancel(deps, env, info, immutables),
+        ExecuteMsg::RescueFunds { token, amount,immutables } => rescue_funds(deps, env, info, token, amount,immutables),
     }
 }
 
@@ -110,6 +110,80 @@ pub fn public_withdraw(
 
     // Call internal withdraw function
     _withdraw(deps, &env, &info, secret, &immutables)
+}
+
+pub fn cancel(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    immutables: Immutables,
+) -> Result<Response, ContractError> {
+    if info.sender.to_string() != immutables.taker {
+        return Err(ContractError::Unauthorized {});
+    }
+    
+    validate_immutables(deps.as_ref(), &env, &immutables)?;
+    
+    // Check if cancellation timelock has been reached
+    let cancellation_time = immutables.timelocks.get_timelock(TimelockStage::DstCancellation);
+    if env.block.time.seconds() < cancellation_time {
+        return Err(ContractError::TimelockNotReached {});
+    }
+
+    let mut messages = vec![];
+
+    messages.push(CosmosMsg::Bank(BankMsg::Send {
+            to_address: immutables.taker,
+            amount: vec![cosmwasm_std::Coin {
+                denom: immutables.token.clone(),
+                amount: immutables.amount.try_into().map_err(|_| ContractError::UintConversionFailed{})?,
+            }],
+        }));
+
+    messages.push(CosmosMsg::Bank(BankMsg::Send {
+            to_address: info.sender.to_string(),
+            amount: vec![cosmwasm_std::Coin {
+                denom: SAFETY_DEPOSIT_TOKEN.load(deps.storage)?,
+                amount: immutables.safety_deposit.try_into().map_err(|_| ContractError::UintConversionFailed{})?,
+            }],
+        }));
+    
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("method", "cancel"))
+}
+
+pub fn rescue_funds(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    token: String,
+    amount: Uint256,
+    immutables: Immutables,
+) -> Result<Response, ContractError> {
+    if info.sender.to_string() != immutables.taker {
+        return Err(ContractError::Unauthorized {});
+    }
+    
+    validate_immutables(deps.as_ref(), &env, &immutables)?;
+    
+    if env.block.time.seconds() < immutables.timelocks.get_timelock(TimelockStage::RescueDelay(RESCUE_DELAY.load(deps.storage)?)) {
+        return Err(ContractError::TimelockNotReached {});
+    }
+
+    let mut messages = vec![];
+
+    messages.push(CosmosMsg::Bank(BankMsg::Send {
+            to_address: immutables.taker,
+            amount: vec![cosmwasm_std::Coin {
+                denom: token,
+                amount: amount.try_into().map_err(|_| ContractError::UintConversionFailed{})?,
+            }],
+        }));
+    
+    Ok(Response::new()
+        .add_messages(messages)
+        .add_attribute("method", "rescue_funds"))
 }
 
 #[entry_point]

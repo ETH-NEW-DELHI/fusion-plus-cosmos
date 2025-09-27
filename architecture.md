@@ -64,3 +64,25 @@ fusion-plus-cosmos/
 ### Phase 5: Testing and Optimization
 1. Comprehensive unit testing
 2. Integration testing with Ethereum
+
+## CRITICAL: Immutables Hash Function
+
+The `compute_immutables_hash` function is **CRITICAL** for protocol security:
+
+### Why It's Critical
+1. **Deterministic Address Computation**: Used as salt for Create2-style addresses
+2. **Cross-Chain Coordination**: Ensures identical parameters on both chains  
+3. **Escrow Validation**: Prevents parameter manipulation attacks
+
+### Requirements
+- Must produce **identical results** to Solidity version
+- Uses EIP-712 style hashing with parameters field replacement
+- Must use Keccak256 for Ethereum compatibility
+- See `HASH_FUNCTION_CRITICAL.md` for detailed implementation
+
+### Security Implications
+**CRITICAL**: If this hash function produces different results than Solidity:
+- Escrow addresses will be different
+- Cross-chain coordination will fail
+- Users' funds could be locked permanently
+- Protocol security will be compromised
