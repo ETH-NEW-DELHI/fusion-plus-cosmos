@@ -1,0 +1,11 @@
+[profile.default]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+solc = "0.8.27"
+
+[rpc_endpoints]
+sepolia = "https://sepolia.infura.io/v3/bd98007cbcf546b098369c9b69a5b5c5"
+
+[etherscan]
+sepolia = { key = "BD98007CBCF546B098369C9B69A5B5C5", url = "https://api-sepolia.etherscan.io/api" }

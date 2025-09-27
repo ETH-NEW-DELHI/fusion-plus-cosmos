@@ -1,0 +1,9 @@
+{
+  "dependencies": {
+    "@1inch/cross-chain-sdk": "^1.0.2",
+    "@cosmjs/cosmwasm-stargate": "^0.36.0",
+    "@cosmjs/proto-signing": "^0.36.0",
+    "@cosmjs/stargate": "^0.36.0",
+    "ethers": "^6.15.0"
+  }
+}
