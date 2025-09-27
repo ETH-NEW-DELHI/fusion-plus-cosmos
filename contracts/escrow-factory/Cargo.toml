@@ -15,5 +15,5 @@ thiserror = "1.0"
 shared = { path = "../shared" }
 interfaces = { path = "../interfaces" }
 cw2 = "1.0"
-cw-storage-plus = "3.0.1"
+cw-storage-plus = "1.1"
 hex = "0.4.3"
