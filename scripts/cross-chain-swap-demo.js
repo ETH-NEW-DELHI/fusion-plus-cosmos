@@ -23,13 +23,18 @@ import ora from 'ora';
 const CONFIG = {
   // Ethereum Sepolia
   ETH_RPC_URL: 'https://sepolia.infura.io/v3/YOUR_INFURA_KEY',
-  ETH_PRIVATE_KEY: 'your_ethereum_private_key_here',
-  ETH_ESCROW_SRC: '0x0000000000000000000000000000000000000000', // Will be deployed
   
-  // Osmosis Testnet
-  OSMOSIS_RPC_URL: 'https://rpc-test.osmosis.zone',
-  OSMOSIS_MNEMONIC: 'your_cosmos_mnemonic_here',
-  OSMOSIS_ESCROW_FACTORY: 'osmo1...', // Will be deployed
+  // User keys (who wants to swap ETH for ATOM)
+  USER_ETH_PRIVATE_KEY: 'your_user_ethereum_private_key_here',
+  USER_COSMOS_MNEMONIC: 'your_user_cosmos_mnemonic_here',
+  
+  // Resolver keys (who provides liquidity)
+  RESOLVER_ETH_PRIVATE_KEY: 'your_resolver_ethereum_private_key_here',
+  RESOLVER_COSMOS_MNEMONIC: 'your_resolver_cosmos_mnemonic_here',
+  
+  // Contract addresses
+  ETH_ESCROW_SRC: '0x0000000000000000000000000000000000000000', // Replace with deployed contract address
+  OSMOSIS_ESCROW_FACTORY: 'osmo1...', // Replace with deployed contract address
   OSMOSIS_ESCROW_DST_CODE_ID: 1,
   
   // Swap parameters
@@ -123,35 +128,61 @@ const FEE_INFO = {
   integrator_fee_recipient: "osmo1..." // Address
 };
 
+// Contract ABIs (placeholder - replace with actual ABIs when contracts are deployed)
+const ESCROW_SRC_ABI = [
+  "function createEscrowSrc(tuple(bytes32 orderHash, bytes32 hashlock, address maker, address taker, string token, uint256 amount, uint256 safetyDeposit, tuple(uint64 deployedAt, uint32 srcWithdrawal, uint32 srcPublicWithdrawal, uint32 srcCancellation, uint32 srcPublicCancellation, uint32 dstWithdrawal, uint32 dstPublicWithdrawal, uint32 dstCancellation) timelocks, bytes parameters) immutables, uint64 srcCancellationTimestamp) external payable",
+  "function withdraw(tuple(bytes32 orderHash, bytes32 hashlock, address maker, address taker, string token, uint256 amount, uint256 safetyDeposit, tuple(uint64 deployedAt, uint32 srcWithdrawal, uint32 srcPublicWithdrawal, uint32 srcCancellation, uint32 srcPublicCancellation, uint32 dstWithdrawal, uint32 dstPublicWithdrawal, uint32 dstCancellation) timelocks, bytes parameters) immutables, bytes32 secret) external",
+  "function cancel(tuple(bytes32 orderHash, bytes32 hashlock, address maker, address taker, string token, uint256 amount, uint256 safetyDeposit, tuple(uint64 deployedAt, uint32 srcWithdrawal, uint32 srcPublicWithdrawal, uint32 srcCancellation, uint32 srcPublicCancellation, uint32 dstWithdrawal, uint32 dstPublicWithdrawal, uint32 dstCancellation) timelocks, bytes parameters) immutables) external",
+  "function rescueFunds(tuple(bytes32 orderHash, bytes32 hashlock, address maker, address taker, string token, uint256 amount, uint256 safetyDeposit, tuple(uint64 deployedAt, uint32 srcWithdrawal, uint32 srcPublicWithdrawal, uint32 srcCancellation, uint32 srcPublicCancellation, uint32 dstWithdrawal, uint32 dstPublicWithdrawal, uint32 dstCancellation) timelocks, bytes parameters) immutables, string token, uint256 amount) external"
+];
+
 class CrossChainSwapDemo {
   constructor() {
     this.secret = null;
     this.hashlock = null;
-    this.ethWallet = null;
-    this.cosmosWallet = null;
+    
+    // User wallets (who wants to swap ETH for ATOM)
+    this.userEthWallet = null;
+    this.userCosmosWallet = null;
+    
+    // Resolver wallets (who provides liquidity)
+    this.resolverEthWallet = null;
+    this.resolverCosmosWallet = null;
+    
+    // Providers and clients
     this.ethProvider = null;
     this.cosmosClient = null;
     this.swapId = null;
+    
+    // Escrow addresses
+    this.escrowDstAddress = null; // Set in step 2, used in step 3
   }
 
   async initialize() {
     logStep(1, "Initializing wallets and connections...");
     
     try {
-      // Initialize Ethereum wallet
-      this.ethWallet = new ethers.Wallet(CONFIG.ETH_PRIVATE_KEY);
+      // Initialize Ethereum provider
       this.ethProvider = new ethers.JsonRpcProvider(CONFIG.ETH_RPC_URL);
-      this.ethWallet = this.ethWallet.connect(this.ethProvider);
       
-      // Initialize Cosmos wallet
-      this.cosmosWallet = await DirectSecp256k1HdWallet.fromMnemonic(CONFIG.OSMOSIS_MNEMONIC);
+      // Initialize User wallets
+      this.userEthWallet = new ethers.Wallet(CONFIG.USER_ETH_PRIVATE_KEY, this.ethProvider);
+      this.userCosmosWallet = await DirectSecp256k1HdWallet.fromMnemonic(CONFIG.USER_COSMOS_MNEMONIC);
+      
+      // Initialize Resolver wallets
+      this.resolverEthWallet = new ethers.Wallet(CONFIG.RESOLVER_ETH_PRIVATE_KEY, this.ethProvider);
+      this.resolverCosmosWallet = await DirectSecp256k1HdWallet.fromMnemonic(CONFIG.RESOLVER_COSMOS_MNEMONIC);
+      
+      // Initialize Cosmos client (using resolver for contract interactions)
       this.cosmosClient = await SigningCosmWasmClient.connectWithSigner(
         CONFIG.OSMOSIS_RPC_URL,
-        this.cosmosWallet
+        this.resolverCosmosWallet
       );
       
-      logSuccess(`Ethereum wallet: ${this.ethWallet.address}`);
-      logSuccess(`Cosmos wallet: ${(await this.cosmosWallet.getAccounts())[0].address}`);
+      logSuccess(`User Ethereum wallet: ${this.userEthWallet.address}`);
+      logSuccess(`User Cosmos wallet: ${(await this.userCosmosWallet.getAccounts())[0].address}`);
+      logSuccess(`Resolver Ethereum wallet: ${this.resolverEthWallet.address}`);
+      logSuccess(`Resolver Cosmos wallet: ${(await this.resolverCosmosWallet.getAccounts())[0].address}`);
       
     } catch (error) {
       logError(`Initialization failed: ${error.message}`);
@@ -174,14 +205,22 @@ class CrossChainSwapDemo {
       logInfo(`Creating EscrowSrc on Ethereum...`);
       logInfo(`Depositing ${CONFIG.SWAP_AMOUNT_ETH} ETH into source escrow...`);
       
-      // Create EscrowSrc on Ethereum (placeholder for when contract is deployed)
+      // Check if contract address is set
+      if (CONFIG.ETH_ESCROW_SRC === '0x0000000000000000000000000000000000000000') {
+        throw new Error('ETH_ESCROW_SRC contract address not set. Please update CONFIG.ETH_ESCROW_SRC with deployed contract address.');
+      }
+      
+      // Get resolver Cosmos address
+      const resolverCosmosAddress = (await this.resolverCosmosWallet.getAccounts())[0].address;
+      
+      // Create EscrowSrc on Ethereum
       const ethEscrowMsg = {
         create_escrow_src: {
           immutables: {
             order_hash: ethers.keccak256(ethers.toUtf8Bytes("swap_" + Date.now())),
             hashlock: this.hashlock,
-            maker: this.ethWallet.address, // User
-            taker: (await this.cosmosWallet.getAccounts())[0].address, // Resolver (Cosmos address)
+            maker: this.userEthWallet.address, // User
+            taker: resolverCosmosAddress, // Resolver (Cosmos address)
             token: "ETH",
             amount: ethers.parseEther(CONFIG.SWAP_AMOUNT_ETH).toString(),
             safety_deposit: ethers.parseEther("0.001").toString(),
@@ -198,8 +237,8 @@ class CrossChainSwapDemo {
             parameters: Buffer.from(JSON.stringify({
               protocol_fee_amount: "0",
               integrator_fee_amount: "0",
-              protocol_fee_recipient: this.ethWallet.address,
-              integrator_fee_recipient: this.ethWallet.address
+              protocol_fee_recipient: this.userEthWallet.address,
+              integrator_fee_recipient: this.userEthWallet.address
             }), 'utf8')
           },
           src_cancellation_timestamp: Math.floor(Date.now() / 1000) + CONFIG.TIMELOCK_ETH
@@ -209,18 +248,25 @@ class CrossChainSwapDemo {
       // Execute transaction to create EscrowSrc and deposit ETH
       logInfo(`Executing transaction on Ethereum...`);
       
-      // TODO: Implement actual transaction when EscrowSrc is deployed
-      // const tx = await this.ethWallet.sendTransaction({
-      //   to: CONFIG.ETH_ESCROW_SRC,
-      //   value: ethers.parseEther(CONFIG.SWAP_AMOUNT_ETH),
-      //   data: ethers.Interface.from(ESCROW_SRC_ABI).encodeFunctionData("createEscrowSrc", [ethEscrowMsg])
-      // });
-      // await tx.wait();
-      // 
-      // logInfo(`Transaction hash: ${tx.hash}`);
-      // logInfo(`ETH deposited: ${CONFIG.SWAP_AMOUNT_ETH}`);
+      // Create contract instance
+      const escrowSrcContract = new ethers.Contract(CONFIG.ETH_ESCROW_SRC, ESCROW_SRC_ABI, this.userEthWallet);
       
-      logSuccess(`EscrowSrc created and ETH deposited (simulated)`);
+      // Execute transaction
+      const tx = await escrowSrcContract.createEscrowSrc(
+        ethEscrowMsg.create_escrow_src.immutables,
+        ethEscrowMsg.create_escrow_src.src_cancellation_timestamp,
+        {
+          value: ethers.parseEther(CONFIG.SWAP_AMOUNT_ETH)
+        }
+      );
+      
+      logInfo(`Transaction submitted: ${tx.hash}`);
+      logInfo(`Waiting for confirmation...`);
+      
+      const receipt = await tx.wait();
+      logInfo(`Transaction confirmed in block: ${receipt.blockNumber}`);
+      logInfo(`Gas used: ${receipt.gasUsed.toString()}`);
+      logSuccess(`EscrowSrc created and ETH deposited successfully!`);
       
     } catch (error) {
       logError(`Step 1 failed: ${error.message}`);
@@ -229,24 +275,29 @@ class CrossChainSwapDemo {
   }
 
   async step2_ResolverCreatesEscrowDst() {
-    logStep(3, "Resolver creates EscrowDst on Osmosis (simulated - no signing)");
+    logStep(3, "Resolver creates EscrowDst on Osmosis");
     
     try {
-      const cosmosAddress = (await this.cosmosWallet.getAccounts())[0].address;
+      const resolverCosmosAddress = (await this.resolverCosmosWallet.getAccounts())[0].address;
+      
+      // Check if contract address is set
+      if (CONFIG.OSMOSIS_ESCROW_FACTORY === 'osmo1...') {
+        throw new Error('OSMOSIS_ESCROW_FACTORY contract address not set. Please update CONFIG.OSMOSIS_ESCROW_FACTORY with deployed contract address.');
+      }
       
       // Prepare immutables for escrow creation (matching your CosmWasm contract structure)
       const feeInfo = {
         protocol_fee_amount: "0", // No protocol fee for demo
         integrator_fee_amount: "0", // No integrator fee for demo
-        protocol_fee_recipient: cosmosAddress, // Resolver address
-        integrator_fee_recipient: cosmosAddress // Resolver address
+        protocol_fee_recipient: resolverCosmosAddress, // Resolver address
+        integrator_fee_recipient: resolverCosmosAddress // Resolver address
       };
       
       const immutables = {
         order_hash: ethers.keccak256(ethers.toUtf8Bytes("swap_" + Date.now())),
         hashlock: this.hashlock,
-        maker: this.ethWallet.address, // User (who wants ATOM)
-        taker: cosmosAddress, // Resolver (who provides ATOM)
+        maker: this.userEthWallet.address, // User (who wants ATOM)
+        taker: resolverCosmosAddress, // Resolver (who provides ATOM)
         token: "uosmo",
         amount: ethers.parseUnits(CONFIG.SWAP_AMOUNT_ATOM, 6).toString(), // ATOM has 6 decimals
         safety_deposit: ethers.parseUnits("0.01", 6).toString(), // 0.01 ATOM safety deposit
@@ -278,34 +329,39 @@ class CrossChainSwapDemo {
         }
       };
       
-      // Simulate transaction (can't sign for Osmosis in demo)
-      logInfo(`Simulating transaction on Osmosis (no actual signing)...`);
-      logInfo(`Would execute: EscrowFactory.create_escrow_dst()`);
-      logInfo(`Would deposit: ${CONFIG.SWAP_AMOUNT_ATOM} ATOM + 0.01 ATOM safety deposit`);
+      // Execute transaction on Osmosis
+      logInfo(`Executing transaction on Osmosis...`);
       
-      // TODO: Implement actual transaction when contracts are deployed
-      // const result = await this.cosmosClient.execute(
-      //   cosmosAddress,
-      //   CONFIG.OSMOSIS_ESCROW_FACTORY,
-      //   msg,
-      //   "auto",
-      //   "Creating EscrowDst for cross-chain swap",
-      //   [
-      //     {
-      //       denom: "uosmo",
-      //       amount: ethers.parseUnits(CONFIG.SWAP_AMOUNT_ATOM, 6).toString()
-      //     },
-      //     {
-      //       denom: "uosmo", 
-      //       amount: ethers.parseUnits("0.01", 6).toString() // Safety deposit
-      //     }
-      //   ]
-      // );
-      // 
-      // logInfo(`Transaction hash: ${result.transactionHash}`);
-      // logInfo(`EscrowDst address: ${result.events.find(e => e.type === 'wasm').attributes.find(a => a.key === 'escrow_address')?.value}`);
+      const result = await this.cosmosClient.execute(
+        resolverCosmosAddress,
+        CONFIG.OSMOSIS_ESCROW_FACTORY,
+        msg,
+        "auto",
+        "Creating EscrowDst for cross-chain swap",
+        [
+          {
+            denom: "uosmo",
+            amount: ethers.parseUnits(CONFIG.SWAP_AMOUNT_ATOM, 6).toString()
+          },
+          {
+            denom: "uosmo", 
+            amount: ethers.parseUnits("0.01", 6).toString() // Safety deposit
+          }
+        ]
+      );
       
-      logSuccess(`EscrowDst created using 1inch Fusion Plus (simulated)`);
+      logInfo(`Transaction hash: ${result.transactionHash}`);
+      
+      // Extract and store the escrow address from transaction events
+      const escrowAddress = result.events.find(e => e.type === 'wasm').attributes.find(a => a.key === 'escrow_address')?.value;
+      if (escrowAddress) {
+        this.escrowDstAddress = escrowAddress;
+        logInfo(`EscrowDst address: ${this.escrowDstAddress}`);
+      } else {
+        throw new Error('Failed to extract EscrowDst address from transaction events');
+      }
+      
+      logSuccess(`EscrowDst created using 1inch Fusion Plus successfully!`);
       
     } catch (error) {
       logError(`Step 2 failed: ${error.message}`);
@@ -314,20 +370,27 @@ class CrossChainSwapDemo {
   }
 
   async step3_UserClaimsATOM() {
-    logStep(4, "User claims ATOM on Osmosis (simulated - no signing)");
+    logStep(4, "User claims ATOM on Osmosis");
     
     try {
-      const cosmosAddress = (await this.cosmosWallet.getAccounts())[0].address;
+      const userCosmosAddress = (await this.userCosmosWallet.getAccounts())[0].address;
       
       logInfo(`Revealing secret: ${this.secret}`);
       logInfo(`Calling EscrowDst.withdraw()...`);
+      
+      // Use the escrow address from step 2
+      if (!this.escrowDstAddress) {
+        throw new Error('EscrowDst address not set. Make sure step 2 completed successfully.');
+      }
+      
+      logInfo(`Using EscrowDst address: ${this.escrowDstAddress}`);
       
       // Prepare fee info for withdraw
       const feeInfo = {
         protocol_fee_amount: "0",
         integrator_fee_amount: "0", 
-        protocol_fee_recipient: cosmosAddress,
-        integrator_fee_recipient: cosmosAddress
+        protocol_fee_recipient: userCosmosAddress,
+        integrator_fee_recipient: userCosmosAddress
       };
       
       // Call 1inch Fusion Plus EscrowDst.withdraw()
@@ -337,8 +400,8 @@ class CrossChainSwapDemo {
           immutables: {
             order_hash: ethers.keccak256(ethers.toUtf8Bytes("swap_" + Date.now())),
             hashlock: this.hashlock,
-            maker: this.ethWallet.address,
-            taker: cosmosAddress,
+            maker: this.userEthWallet.address,
+            taker: userCosmosAddress,
             token: "uosmo",
             amount: ethers.parseUnits(CONFIG.SWAP_AMOUNT_ATOM, 6).toString(),
             safety_deposit: ethers.parseUnits("0.01", 6).toString(),
@@ -357,24 +420,25 @@ class CrossChainSwapDemo {
         }
       };
       
-      // Simulate transaction (can't sign for Osmosis in demo)
-      logInfo(`Simulating withdraw transaction on Osmosis (no actual signing)...`);
-      logInfo(`Would execute: EscrowDst.withdraw()`);
-      logInfo(`Would withdraw: ${CONFIG.SWAP_AMOUNT_ATOM} ATOM to user`);
+      // Create user Cosmos client for withdrawal
+      const userCosmosClient = await SigningCosmWasmClient.connectWithSigner(
+        CONFIG.OSMOSIS_RPC_URL,
+        this.userCosmosWallet
+      );
       
-      // TODO: Implement actual transaction when escrow is deployed
-      // const result = await this.cosmosClient.execute(
-      //   cosmosAddress,
-      //   escrowAddress, // Address from step 2
-      //   msg,
-      //   "auto",
-      //   "Withdrawing ATOM from EscrowDst"
-      // );
-      // 
-      // logInfo(`Transaction hash: ${result.transactionHash}`);
-      // logInfo(`ATOM withdrawn: ${CONFIG.SWAP_AMOUNT_ATOM}`);
+      logInfo(`Executing withdraw transaction on Osmosis...`);
       
-      logSuccess(`ATOM claimed using 1inch Fusion Plus (simulated)`);
+      const result = await userCosmosClient.execute(
+        userCosmosAddress,
+        this.escrowDstAddress,
+        msg,
+        "auto",
+        "Withdrawing ATOM from EscrowDst"
+      );
+      
+      logInfo(`Transaction hash: ${result.transactionHash}`);
+      logInfo(`ATOM withdrawn: ${CONFIG.SWAP_AMOUNT_ATOM}`);
+      logSuccess(`ATOM claimed using 1inch Fusion Plus successfully!`);
       
     } catch (error) {
       logError(`Step 3 failed: ${error.message}`);
@@ -388,6 +452,14 @@ class CrossChainSwapDemo {
     try {
       logInfo(`Using revealed secret to claim ETH from EscrowSrc...`);
       
+      // Check if contract address is set
+      if (CONFIG.ETH_ESCROW_SRC === '0x0000000000000000000000000000000000000000') {
+        throw new Error('ETH_ESCROW_SRC contract address not set. Please update CONFIG.ETH_ESCROW_SRC with deployed contract address.');
+      }
+      
+      // Get resolver Cosmos address
+      const resolverCosmosAddress = (await this.resolverCosmosWallet.getAccounts())[0].address;
+      
       // Create withdraw message for EscrowSrc
       const ethWithdrawMsg = {
         withdraw: {
@@ -395,8 +467,8 @@ class CrossChainSwapDemo {
           immutables: {
             order_hash: ethers.keccak256(ethers.toUtf8Bytes("swap_" + Date.now())),
             hashlock: this.hashlock,
-            maker: this.ethWallet.address,
-            taker: (await this.cosmosWallet.getAccounts())[0].address, // Resolver
+            maker: this.userEthWallet.address,
+            taker: resolverCosmosAddress, // Resolver
             token: "ETH",
             amount: ethers.parseEther(CONFIG.SWAP_AMOUNT_ETH).toString(),
             safety_deposit: ethers.parseEther("0.001").toString(),
@@ -413,8 +485,8 @@ class CrossChainSwapDemo {
             parameters: Buffer.from(JSON.stringify({
               protocol_fee_amount: "0",
               integrator_fee_amount: "0",
-              protocol_fee_recipient: this.ethWallet.address,
-              integrator_fee_recipient: this.ethWallet.address
+              protocol_fee_recipient: this.resolverEthWallet.address,
+              integrator_fee_recipient: this.resolverEthWallet.address
             }), 'utf8')
           }
         }
@@ -423,17 +495,22 @@ class CrossChainSwapDemo {
       // Execute transaction to claim ETH
       logInfo(`Executing claim transaction on Ethereum...`);
       
-      // TODO: Implement actual transaction when EscrowSrc is deployed
-      // const tx = await this.ethWallet.sendTransaction({
-      //   to: CONFIG.ETH_ESCROW_SRC,
-      //   data: ethers.Interface.from(ESCROW_SRC_ABI).encodeFunctionData("withdraw", [ethWithdrawMsg])
-      // });
-      // await tx.wait();
-      // 
-      // logInfo(`Transaction hash: ${tx.hash}`);
-      // logInfo(`ETH claimed: ${CONFIG.SWAP_AMOUNT_ETH}`);
+      // Create contract instance
+      const escrowSrcContract = new ethers.Contract(CONFIG.ETH_ESCROW_SRC, ESCROW_SRC_ABI, this.resolverEthWallet);
       
-      logSuccess(`ETH claimed using 1inch Fusion Plus (simulated)`);
+      // Execute transaction
+      const tx = await escrowSrcContract.withdraw(
+        ethWithdrawMsg.withdraw.immutables,
+        ethWithdrawMsg.withdraw.secret
+      );
+      
+      logInfo(`Transaction submitted: ${tx.hash}`);
+      logInfo(`Waiting for confirmation...`);
+      
+      const receipt = await tx.wait();
+      logInfo(`Transaction confirmed in block: ${receipt.blockNumber}`);
+      logInfo(`Gas used: ${receipt.gasUsed.toString()}`);
+      logSuccess(`ETH claimed successfully!`);
       
     } catch (error) {
       logError(`Step 4 failed: ${error.message}`);
