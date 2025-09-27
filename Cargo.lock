@@ -819,8 +819,10 @@ dependencies = [
  "cw-storage-plus 1.2.0",
  "cw2",
  "cw20",
+ "interfaces",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
  "shared",
  "thiserror",
 ]
@@ -831,7 +833,7 @@ version = "0.1.0"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std 1.5.11",
- "cw-storage-plus 3.0.1",
+ "cw-storage-plus 1.2.0",
  "cw2",
  "hex",
  "interfaces",
