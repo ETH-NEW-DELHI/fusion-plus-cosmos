@@ -1,9 +1,12 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Addr,instantiate2_address};
+use cosmwasm_std::{Addr};
 use shared::types::Immutables;
 
 #[cw_serde]
-pub struct InstantiateMsg {}
+pub struct InstantiateMsg {
+    pub escrow_dst_code_id: u64,
+    pub safety_deposit_token: String,
+}
 
 #[cw_serde]
 pub enum ExecuteMsg {
