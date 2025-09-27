@@ -64,9 +64,9 @@ pub fn execute(
 ) -> Result<Response, ContractError> {
     match msg {
         ExecuteMsg::Withdraw { secret, immutables } => withdraw(deps, env, info, secret, immutables),
-        ExecuteMsg::PublicWithdraw { secret, immutables } => todo!(),
+        ExecuteMsg::PublicWithdraw { secret, immutables } => public_withdraw(deps, env, info, secret, immutables),
         ExecuteMsg::Cancel { immutables } => todo!(),
-        ExecuteMsg::RescueFunds { token, amount,immutables } => todo!(),
+        ExecuteMsg::RescueFunds { token, amount,immutables } => todo!()
     }
 }
 
@@ -86,6 +86,26 @@ pub fn withdraw(
     }
     if env.block.time.seconds() >= immutables.timelocks.get_timelock(TimelockStage::DstCancellation) {
         return Err(ContractError::TimelockNotReached {});
+    }
+
+    // Call internal withdraw function
+    _withdraw(deps, &env, &info, secret, &immutables)
+}
+
+pub fn public_withdraw(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    secret: Binary,
+    immutables: Immutables,
+) -> Result<Response, ContractError> {
+    if env.block.time.seconds() < immutables.timelocks.get_timelock(TimelockStage::DstPublicWithdrawal) {
+        return Err(ContractError::InvalidTime {});
+    }
+    
+    // Check if cancellation timelock has not been reached yet
+    if env.block.time.seconds() >= immutables.timelocks.get_timelock(TimelockStage::DstCancellation) {
+        return Err(ContractError::InvalidTime {});
     }
 
     // Call internal withdraw function
