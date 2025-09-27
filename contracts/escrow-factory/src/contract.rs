@@ -5,11 +5,10 @@ use cosmwasm_std::{
 use cw2::set_contract_version;
 use shared::{validate_token_amounts, ContractError};
 
-use crate::state::{ESCROW_DST_CODE_HASH, ESCROW_DST_CODE_ID, SAFETY_DEPOSIT_TOKEN};
+use crate::state::{ESCROW_DST_CODE_ID, SAFETY_DEPOSIT_TOKEN};
 use crate::RESCUE_DELAY;
 use interfaces::escrow_factory::{ExecuteMsg, InstantiateMsg, QueryMsg};
 use shared::types::Immutables;
-use shared::utils::{compute_escrow_address, get_code_hash};
 
 const CONTRACT_NAME: &str = "crates.io:escrow-factory";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,9 +24,6 @@ pub fn instantiate(
 
     ESCROW_DST_CODE_ID.save(deps.storage, &msg.escrow_dst_code_id)?;
     SAFETY_DEPOSIT_TOKEN.save(deps.storage, &msg.safety_deposit_token)?;
-
-    let escrow_dst_code_hash = get_code_hash(deps.querier, msg.escrow_dst_code_id)?;
-    ESCROW_DST_CODE_HASH.save(deps.storage, &escrow_dst_code_hash)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
@@ -57,6 +53,9 @@ pub fn create_escrow_dst(
     immutables: &mut Immutables,
     src_cancellation_timestamp: u64,
 ) -> Result<Response, ContractError> {
+    // for verification in escrow dst
+    let immutable_hash = immutables.compute_immutables_hash()?;
+
     immutables.timelocks.set_deployed_at(env.block.time);
 
     if immutables
@@ -67,8 +66,6 @@ pub fn create_escrow_dst(
         return Err(ContractError::InvalidCreationTime {});
     }
 
-    // Compute salt from immutables hash (matches Solidity: bytes32 salt = immutables.hashMem())
-    let salt = immutables.compute_immutables_hash()?;
 
     // Get the safety deposit token from state
     let safety_deposit_token = SAFETY_DEPOSIT_TOKEN.load(deps.storage).unwrap();
@@ -80,45 +77,25 @@ pub fn create_escrow_dst(
     let instantiate_msg = to_json_binary(&interfaces::escrow_dst::InstantiateMsg {
         safety_deposit_denom: safety_deposit_token,
         rescue_delay: RESCUE_DELAY,
+        immutable_hash: immutable_hash.clone()
     })?;
 
-    // Deploy escrow deterministically using salt (matches Solidity: implementation.cloneDeterministic(salt, value))
-    // Convert salt string to 32-byte array for Instantiate2
-    let salt_bytes = hex::decode(&salt).map_err(|_| {
-        ContractError::Std(cosmwasm_std::StdError::generic_err("Invalid salt format"))
-    })?;
-
-    let create_escrow_msg = CosmosMsg::Wasm(WasmMsg::Instantiate2 {
+    let create_escrow_msg = CosmosMsg::Wasm(WasmMsg::Instantiate {
         admin: Some(info.sender.to_string()),
         code_id: ESCROW_DST_CODE_ID.load(deps.storage).unwrap(),
         msg: instantiate_msg,
         funds: info.funds,
-        label: format!("escrow-dst-{}", &salt[..8]),
-        salt: cosmwasm_std::Binary::from(salt_bytes),
+        label: format!("escrow-dst-{}", &immutable_hash[..8]),
     });
 
     Ok(Response::new()
         .add_submessage(SubMsg::new(create_escrow_msg))
         .add_attribute("method", "create_escrow_dst")
         .add_attribute("hashlock", immutables.hashlock.clone())
-        .add_attribute("taker", immutables.taker.clone())
-        .add_attribute("salt", salt))
+        .add_attribute("taker", immutables.taker.clone()))
 }
 
 #[entry_point]
-pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
-    match msg {
-        QueryMsg::AddressOfEscrowDst { immutables } => {
-            let escrow_dst_code_hash = ESCROW_DST_CODE_HASH.load(deps.storage).unwrap();
-            let escrow_address = compute_escrow_address(
-                &immutables,
-                escrow_dst_code_hash,
-                &deps.api.addr_canonicalize(env.contract.address.as_str())?,
-            )
-            .map_err(|e| {
-                cosmwasm_std::StdError::generic_err(format!("Failed to compute address: {}", e))
-            })?;
-            to_json_binary(&escrow_address)
-        }
-    }
+pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
+    return to_json_binary("no queries")
 }

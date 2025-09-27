@@ -4,15 +4,19 @@ members = [
 ]
 resolver = "2"
 
+[workspace.package]
+rust-version  = "1.65.0"
+
 [profile.release]
 opt-level = 3
 debug = false
-rpath = false
-lto = true
+strip = "symbols"
+debug-assertions = false
 overflow-checks = true
-panic = "abort"
-incremental = false
+lto = true
 codegen-units = 1
+panic = "abort"
 
-[profile.release.package."*"]
-opt-level = 3
+[profile.release.build-override]
+opt-level = 0
+debug = true 

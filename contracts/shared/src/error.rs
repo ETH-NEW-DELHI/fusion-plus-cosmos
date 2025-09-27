@@ -31,14 +31,14 @@ pub enum ContractError {
     #[error("Invalid secret")]
     InvalidSecret {},
 
-    #[error("Invalid time")]
-    InvalidTime {},
-
     #[error("Invalid immutables")]
     InvalidImmutables {},
 
     #[error("Timelock has not reached")]
     TimelockNotReached {},
+
+    #[error("Timelock has crossed")]
+    TimelockHasCrossed {},
 
     #[error("Failed to convert uint256 into uint128")]
     UintConversionFailed {},

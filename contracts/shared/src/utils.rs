@@ -143,6 +143,9 @@ pub fn compute_escrow_address(
 
 #[cfg(test)]
 mod tests {
+    use serde::{Serialize, Deserialize};
+    use cosmwasm_std::{to_binary, Uint128};
+
     use super::*;
     #[test]
     fn test_secret_validation() {

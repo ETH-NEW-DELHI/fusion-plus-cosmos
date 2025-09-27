@@ -1,6 +1,6 @@
-use cosmwasm_std::Uint256;
+use cosmwasm_std::{to_json_binary, Uint256};
 use cosmwasm_std::{
-    entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, ContractInfoResponse,
+    entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult,
     CosmosMsg, BankMsg, Uint128,
 };
 use cw2::set_contract_version;
@@ -9,10 +9,10 @@ use shared::types::Immutables;
 use shared::types::TimelockStage;
 use shared::error::ContractError;
 use interfaces::escrow_dst::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{FACTORY_CONTRACT_ADDRESS, ESCROW_DST_CODE_HASH, SAFETY_DEPOSIT_TOKEN};
+use crate::state::{IMMUTABLE_HASH, SAFETY_DEPOSIT_TOKEN};
 use crate::RESCUE_DELAY;
 
-use shared::utils::{validate_secret, compute_escrow_address};
+use shared::utils::{validate_secret};
 use serde::{Deserialize, Serialize};
 
 const CONTRACT_NAME: &str = "crates.io:escrow-dst";
@@ -31,23 +31,14 @@ pub struct FeeInfo {
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
-    info: MessageInfo,
+    _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
-    // sender is the factory contract
-    FACTORY_CONTRACT_ADDRESS.save(deps.storage, &info.sender.to_string())?;
-
-    let contract_info: ContractInfoResponse = deps
-        .querier
-        .query_wasm_contract_info(info.sender)?;
-
-    let contract_code_hash = deps.querier.query_wasm_code_info(contract_info.code_id)?.checksum;
-
-    ESCROW_DST_CODE_HASH.save(deps.storage, &contract_code_hash)?;
-
     SAFETY_DEPOSIT_TOKEN.save(deps.storage, &msg.safety_deposit_denom)?;
+
+    IMMUTABLE_HASH.save(deps.storage, &msg.immutable_hash)?;
 
     RESCUE_DELAY.save(deps.storage, &msg.rescue_delay)?;
 
@@ -85,11 +76,11 @@ pub fn withdraw(
         return Err(ContractError::TimelockNotReached {});
     }
     if env.block.time.seconds() >= immutables.timelocks.get_timelock(TimelockStage::DstCancellation) {
-        return Err(ContractError::TimelockNotReached {});
+        return Err(ContractError::TimelockHasCrossed {});
     }
 
     // Call internal withdraw function
-    _withdraw(deps, &env, &info, secret, &immutables)
+    _withdraw(deps, &info, secret, &immutables)
 }
 
 pub fn public_withdraw(
@@ -100,16 +91,16 @@ pub fn public_withdraw(
     immutables: Immutables,
 ) -> Result<Response, ContractError> {
     if env.block.time.seconds() < immutables.timelocks.get_timelock(TimelockStage::DstPublicWithdrawal) {
-        return Err(ContractError::InvalidTime {});
+        return Err(ContractError::TimelockNotReached {});
     }
     
     // Check if cancellation timelock has not been reached yet
     if env.block.time.seconds() >= immutables.timelocks.get_timelock(TimelockStage::DstCancellation) {
-        return Err(ContractError::InvalidTime {});
+        return Err(ContractError::TimelockHasCrossed {});
     }
 
     // Call internal withdraw function
-    _withdraw(deps, &env, &info, secret, &immutables)
+    _withdraw(deps, &info, secret, &immutables)
 }
 
 pub fn cancel(
@@ -122,7 +113,7 @@ pub fn cancel(
         return Err(ContractError::Unauthorized {});
     }
     
-    validate_immutables(deps.as_ref(), &env, &immutables)?;
+    validate_immutables(deps.as_ref(), &immutables)?;
     
     // Check if cancellation timelock has been reached
     let cancellation_time = immutables.timelocks.get_timelock(TimelockStage::DstCancellation);
@@ -165,7 +156,7 @@ pub fn rescue_funds(
         return Err(ContractError::Unauthorized {});
     }
     
-    validate_immutables(deps.as_ref(), &env, &immutables)?;
+    validate_immutables(deps.as_ref(), &immutables)?;
     
     if env.block.time.seconds() < immutables.timelocks.get_timelock(TimelockStage::RescueDelay(RESCUE_DELAY.load(deps.storage)?)) {
         return Err(ContractError::TimelockNotReached {});
@@ -188,35 +179,28 @@ pub fn rescue_funds(
 
 #[entry_point]
 pub fn query(_deps: Deps, _env: Env, _msg: QueryMsg) -> StdResult<Binary> {
-    Err(cosmwasm_std::StdError::generic_err("Query not implemented"))
+    return to_json_binary("no query")
 }
 
 fn validate_immutables(
     deps: Deps,
-    env: &Env,
     immutables: &Immutables,
 ) -> Result<(), ContractError> {    
-    let escrow_code_hash = ESCROW_DST_CODE_HASH.load(deps.storage)?;
-    let factory_contract_address = FACTORY_CONTRACT_ADDRESS.load(deps.storage)?;
-    let expected_address = compute_escrow_address(&immutables, escrow_code_hash, &deps.api.addr_canonicalize(&factory_contract_address)?)?;
-    
-    // Verify that the current contract address matches the expected address
-    if env.contract.address != expected_address {
+    let immutables_hash = immutables.compute_immutables_hash()?;
+    if IMMUTABLE_HASH.load(deps.storage)? != immutables_hash {
         return Err(ContractError::InvalidImmutables{});
     }
-    
     Ok(())
 }
 
 /// Internal withdraw function that handles fee distribution and token transfers
 fn _withdraw(
     deps: DepsMut,
-    env: &Env,
     info: &MessageInfo,
     secret: Binary,
     immutables: &Immutables,
 ) -> Result<Response, ContractError> {
-    validate_immutables(deps.as_ref(), env, immutables)?;
+    validate_immutables(deps.as_ref(), immutables)?;
     
     if !validate_secret(&secret, &immutables.hashlock) {
         return Err(ContractError::InvalidSecret {});

@@ -1,11 +1,12 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Uint256, Binary};
+use cosmwasm_std::{Addr, Binary, Uint256};
 use shared::Immutables;
 
 #[cw_serde]
 pub struct InstantiateMsg {
     pub safety_deposit_denom: String,
-    pub rescue_delay: u32
+    pub rescue_delay: u32,
+    pub immutable_hash: String,
 }
 
 #[cw_serde]
@@ -30,4 +31,9 @@ pub enum ExecuteMsg {
 
 #[cw_serde]
 #[derive(QueryResponses)]
-pub enum QueryMsg {}
+pub enum QueryMsg {
+     #[returns(Addr)]
+    QueryFactoryAddress {},
+     #[returns(Addr)]
+    QueryEscrowDstCodeHash {},
+}
