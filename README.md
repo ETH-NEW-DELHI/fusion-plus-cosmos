@@ -79,6 +79,14 @@ docker run --rm -v "$(pwd)":/code \
 - **Time-based Access**: Private/public withdrawal and cancellation periods
 - **Safety Deposits**: Native token incentives for proper execution
 
+## Demo Transactions
+
+### Ethereum (Sepolia Testnet)
+- [Transaction Hash: 0x02ea295fac5784788935d68fe433c3a44f86e3348d8e812c55f5d5d2b7239cad](https://sepolia.etherscan.io/tx/0x02ea295fac5784788935d68fe433c3a44f86e3348d8e812c55f5d5d2b7239cad)
+
+### Osmosis (Testnet)
+- [Transaction Hash: D3B49604BF4703296783C4B45BCD7683CDC6609EF4AD3E27EF3C70BD0053FE31](https://testnet.ping.pub/osmosis/tx/D3B49604BF4703296783C4B45BCD7683CDC6609EF4AD3E27EF3C70BD0053FE31)
+
 ## Security
 
 - Keccak256 compatibility with Ethereum
