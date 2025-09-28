@@ -319,52 +319,7 @@ class CrossChainSwapDemo1inch {
       
       this.srcEscrowAddress = await escrowFactory.addressOfEscrowSrc(immutablesTuple);
       
-      logInfo(`Source escrow address: ${this.srcEscrowAddress}`);
-      
-      logSuccess("Order filled and escrow contracts created!");
-      
-      // Test deployDst function
-      logInfo(`\n🔍 Testing deployDst function...`);
-      try {
-        const dstImmutables = {
-          orderHash: this.immutables.orderHash,
-          hashlock: this.immutables.hashlock,
-          maker: this.immutables.maker,
-          taker: this.immutables.taker,
-          token: this.immutables.token,
-          amount: ethers.parseEther(CONFIG.SWAP_AMOUNT_OSMO), // OSMO amount
-          safetyDeposit: ethers.parseEther("0.0001"),
-          timelocks: this.immutables.timelocks
-        };
-        
-        const srcCancellationTimestamp = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
-        
-        logInfo(`Calling Resolver.deployDst()...`);
-        logInfo(`Parameters:`);
-        logInfo(`  - DstImmutables: ${JSON.stringify(dstImmutables, (key, value) => typeof value === 'bigint' ? value.toString() : value)}`);
-        logInfo(`  - SrcCancellationTimestamp: ${srcCancellationTimestamp}`);
-        
-        const dstTx = await resolver.deployDst(
-          dstImmutables,
-          srcCancellationTimestamp,
-          { value: ethers.parseEther("0.0001") } // Send some ETH for the operation
-        );
-        
-        logInfo(`DeployDst transaction submitted: ${dstTx.hash}`);
-        const dstReceipt = await dstTx.wait();
-        logInfo(`DeployDst transaction confirmed in block: ${dstReceipt.blockNumber}`);
-        logInfo(`🔗 ETHEREUM DEPLOY_DST TX HASH: ${dstTx.hash}`);
-        
-        // Store transaction hash
-        this.txHashes.ethereum.deployDst = dstTx.hash;
-        
-        logSuccess(`✅ deployDst function works successfully!`);
-        
-      } catch (dstError) {
-        logError(`deployDst test failed: ${dstError.message}`);
-        // Don't throw here, just log the error and continue
-      }
-      
+      logInfo(`Source escrow address: ${this.srcEscrowAddress}`);      
     } catch (error) {
       logError(`Step 2 failed: ${error.message}`);
       throw error;
