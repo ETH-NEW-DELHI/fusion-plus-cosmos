@@ -515,24 +515,38 @@ class CrossChainSwapDemo1inch {
       logInfo(`Secret hash: ${secretHash}`);
       logInfo(`Hashlock match: ${secretHash === this.hashlock}`);
       
-      // Prepare the withdrawal message (convert secret to base64 for Binary type)
+      // Prepare the withdrawal message (use base64 for Binary type)
+      // The CosmWasm client expects base64-encoded data for Binary type
       const secretBase64 = Buffer.from(secretBytes).toString('base64');
+      
+      logInfo(`Secret bytes length: ${secretBytes.length}`);
+      logInfo(`Secret base64: ${secretBase64}`);
+      logInfo(`Secret hex: ${this.secret}`);
+      
+      // Verify that the base64-encoded secret produces the correct hash
+      const decodedBytes = Buffer.from(secretBase64, 'base64');
+      const decodedHash = ethers.keccak256(decodedBytes);
+      logInfo(`Decoded secret hash: ${decodedHash}`);
+      logInfo(`Decoded hash matches: ${decodedHash === this.hashlock}`);
       
       // Calculate OSMO amounts for withdrawal (must match what was used in creation)
       const osmoAmount = ethers.parseUnits(CONFIG.SWAP_AMOUNT_OSMO, 6); // OSMO has 6 decimals
       const safetyDepositAmount = ethers.parseUnits("0.01", 6); // 0.01 OSMO safety deposit
       
-      // Use the deployed_at time from when the escrow was created
+      // Use the immutables with the correct deployed_at time from escrow creation
+      // The contract will validate the secret against the hashlock in these immutables
+      const withdrawImmutables = {
+        ...this.cosmosImmutables,
+        timelocks: {
+          ...this.cosmosImmutables.timelocks,
+          deployed_at: this.escrowDeployedAt // Use the actual deployed_at time
+        }
+      };
+      
       const withdrawMsg = {
         withdraw: {
-          secret: secretBase64, // Convert to base64 for Binary type
-          immutables: {
-            ...this.cosmosImmutables,
-            timelocks: {
-              ...this.cosmosImmutables.timelocks,
-              deployed_at: this.escrowDeployedAt // Use the actual deployed_at time
-            }
-          }
+          secret: secretBase64, // Use base64 for Binary type
+          immutables: withdrawImmutables
         }
       };
       
@@ -540,6 +554,27 @@ class CrossChainSwapDemo1inch {
       logInfo(`Contract Address: ${this.dstEscrowAddress}`);
       logInfo(`Method: withdraw`);
       logInfo(`Withdrawal message:`, JSON.stringify(withdrawMsg, null, 2));
+      
+      // Try to query the contract to see what immutables it has stored
+      try {
+        logInfo(`🔍 Querying contract for stored immutables...`);
+        const queryResult = await cosmosClient.queryContractSmart(this.dstEscrowAddress, {
+          get_immutables: {}
+        });
+        logInfo(`Contract stored immutables:`, JSON.stringify(queryResult, null, 2));
+        logInfo(`Contract hashlock: ${queryResult.hashlock}`);
+        logInfo(`Our hashlock: ${this.hashlock}`);
+        logInfo(`Hashlock match with contract: ${queryResult.hashlock === this.hashlock}`);
+      } catch (queryError) {
+        logInfo(`Failed to query contract immutables: ${queryError.message}`);
+      }
+      logInfo(`Deployed at: ${this.escrowDeployedAt}`);
+      logInfo(`Current time: ${Math.floor(Date.now() / 1000)}`);
+      logInfo(`Dst withdrawal timelock: ${this.escrowDeployedAt + 100}`);
+      logInfo(`Dst cancellation timelock: ${this.escrowDeployedAt + 3000}`);
+      logInfo(`Withdrawal immutables hashlock: ${withdrawImmutables.hashlock}`);
+      logInfo(`Original hashlock: ${this.hashlock}`);
+      logInfo(`Hashlock match in immutables: ${withdrawImmutables.hashlock === this.hashlock}`);
       
       // Wait for dst_withdrawal timelock (100 seconds)
       logInfo(`⏳ Waiting for dst_withdrawal timelock (100 seconds)...`);
@@ -578,8 +613,7 @@ class CrossChainSwapDemo1inch {
       
     } catch (error) {
       logError(`Step 4 failed: ${error.message}`);
-      logInfo(`Continuing with demo (withdrawal simulation)`);
-      // Don't throw error, continue with the demo
+      throw new Error(`Osmosis withdrawal failed: ${error.message}`);
     }
   }
 
@@ -593,18 +627,25 @@ class CrossChainSwapDemo1inch {
       logInfo(`Resolver withdrawing ETH from ${this.srcEscrowAddress}`);
       logInfo(`Using secret: ${this.secret}`);
       
-      // MOCK APPROACH: Simulate Ethereum withdrawal
-      logInfo(`🔧 MOCK MODE: Simulating Ethereum Resolver.withdraw()`);
+      // REAL APPROACH: Execute actual Ethereum withdrawal
+      logInfo(`🌐 EXECUTING REAL ETHEREUM WITHDRAWAL:`);
       logInfo(`Contract Address: ${CONFIG.ETH_RESOLVER}`);
       logInfo(`Parameters:`);
       logInfo(`  - Secret: ${this.secret}`);
       logInfo(`  - Immutables: ${JSON.stringify(this.immutables, (key, value) => typeof value === 'bigint' ? value.toString() : value)}`);
       
-      // Simulate successful withdrawal
+      // Execute real withdrawal transaction
+      const tx = await resolver.withdraw(this.secret, this.immutables);
+      logInfo(`Transaction submitted: ${tx.hash}`);
+      
+      const receipt = await tx.wait();
+      logInfo(`Transaction confirmed in block: ${receipt.blockNumber}`);
+      logInfo(`🔗 ETHEREUM WITHDRAWAL TX HASH: ${tx.hash}`);
+      
+      this.txHashes.ethereum.withdraw = tx.hash;
+      
       logSuccess(`✅ Resolver successfully withdrew ${CONFIG.SWAP_AMOUNT_ETH} ETH from source escrow`);
-      logInfo(`💰 Resolver received ETH tokens (mocked)`);
-      logInfo(`Transaction simulated successfully`);
-      logInfo(`Block number: ${Math.floor(Math.random() * 1000000) + 5000000}`);
+      logInfo(`💰 Resolver received ETH tokens`);
       
       logSuccess("Resolver received ETH on Ethereum!");
       
